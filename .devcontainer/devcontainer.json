@@ -1,0 +1,47 @@
+{
+  "name": "Tracking - Devcontainer",
+  "privileged": false,
+  "remoteUser": "user",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+    "USER_UID": "1000",
+    "USER_GID": "1000",
+    "USERNAME": "user"
+    }
+  },
+  "workspaceFolder": "/ws",
+  "workspaceMount": "source=${localWorkspaceFolder}/ws,target=/ws,type=bind,consistency=cached",
+  "customizations": {
+    "vscode": {
+      "extensions":[
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-themes", 
+        "twxs.cmake",
+        "donjayamanne.python-extension-pack",
+        "ms-iot.vscode-ros"
+      ]
+    }
+  },
+  "containerEnv": {
+    "DISPLAY": "unix:0",
+    "ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
+    "ROS_DOMAIN_ID": "68"
+  },
+  "runArgs": [
+    "--network", "host",
+    "--group-add", "dialout",
+    "--group-add", "video",
+    "-e", "DISPLAY=${env:DISPLAY}",
+    "-e", "QT_X11_NO_MITSHM=1",
+    "--device=/dev/dri",
+    "--device=/dev/snd"
+  ],
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
+    "source=${env:XAUTHORITY},target=/root/.Xauthority,type=bind"
+  ]
+  // "postCreateCommand": 
+  
+}

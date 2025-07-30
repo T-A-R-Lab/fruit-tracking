@@ -71,19 +71,19 @@ Este proyecto también permite trabajar con Ground Truth existente ejecutando sc
 
 1. **Visualizar Ground Truth**
    ```bash
-   python visualize_gt.py
+   python3 visualize_gt.py
    ```
    Genera un video con las imágenes originales y las anotaciones GT superpuestas.
 
 2. **Ejecutar tracking**
    ```bash
-   python coco_tracking.py
+   python3 coco_tracking.py
    ```
    Procesa las anotaciones GT y genera las trayectorias de tracking utilizando filtros de Kalman.
 
 3. **Visualizar resultados del tracking**
    ```bash
-   python visualize_tracking.py
+   python3 visualize_tracking.py
    ```
    Crea un video mostrando las trayectorias generadas por el algoritmo de tracking.
 

@@ -1,7 +1,6 @@
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timedelta
-import pickle
 import json
 from copy import deepcopy
 
@@ -56,14 +55,54 @@ class TrackInfo:
         
         return net_movement, total_distance
 
-def run_tracking(coco_file, image_folder, output_file="tracking_results.pkl"):
+def export_to_mot(tracking_results, output_file, default_class_id=1):
     """
-    Ejecuta el tracking en datos COCO y guarda los resultados.
+    Exporta resultados de tracking a formato MOT Challenge.
+    tracking_results: lista de (timestamp, tracks)
+    """
+    uuid_to_int = {}
+    next_id = 1
+    with open(output_file, "w") as f:
+        for frame_idx, (timestamp, tracks) in enumerate(tracking_results, 1):
+            for track in tracks:
+                if len(track.states) == 0:
+                    continue
+                
+                state = track.states[-1]
+                # Normalmente [x, vx, y, vy, w, h]
+                try:
+                    x, vx, y, vy, w, h = state.state_vector.flatten()
+                except ValueError:
+                    x, y, w, h = state.state_vector.flatten()
+                
+                # Reasignar ID del track para MOT
+                # Si se desea, se podria usar UUID en vez de ints en los MOT
+                str_id = str(track.id)
+                if str_id not in uuid_to_int:
+                    uuid_to_int[str_id] = next_id
+                    next_id += 1
+                mot_id = uuid_to_int[str_id]
+                
+                # Obtener class_id si está disponible en track_info
+                class_id = default_class_id
+                if track.metadata["category_id"] is not None:
+                    class_id = track.metadata["category_id"]
+                
+                not_ignored = 1        # 1 = no ignorar (evaluar siempre)
+                visibility = 1         # 1 = completamente visible
+
+                # Formato MOT: frame, id, x, y, w, h, not_ignored, class_id, visibility, -1
+                line = f"{frame_idx},{mot_id},{x:.2f},{y:.2f},{w:.2f},{h:.2f},{not_ignored},{class_id},{visibility},-1\n"
+                f.write(line)
+    print(f"Archivo MOT exportado en: {output_file}")
+
+def run_tracking(coco_file, image_folder):
+    """
+    Ejecuta el tracking en datos COCO y retorna los resultados.
     
     Args:
         coco_file: Ruta al archivo JSON de anotaciones COCO
         image_folder: Carpeta que contiene las imágenes
-        output_file: Ruta donde guardar los resultados del tracking
     
     Returns:
         Lista de tuplas (timestamp, tracks)
@@ -213,25 +252,18 @@ def run_tracking(coco_file, image_folder, output_file="tracking_results.pkl"):
         print(f"  Distancia total: {total_distance:.1f} pixels")
         print(f"  Frames de vida: {first_time} a {last_time}")
     
-    # Guardar resultados para visualización posterior
-    with open(output_file, "wb") as f:
-        result_data = {
-            'all_tracks': all_tracks,
-            'track_info': all_track_info
-        }
-        pickle.dump(result_data, f)
-    
-    print(f"Resultados guardados en {output_file}")
-    
     return all_tracks, all_track_info
 
 if __name__ == "__main__":
     # Configurar rutas - ajusta estas según tu sistema
     coco_file = "/ws/Frutillas/annotations/annotations_bbox_1_l_week1_30_70.json"
     image_folder = "/ws/Frutillas/images/"
-    output_file = "/ws/Frutillas/results/tracking/tracking_results.pkl"
+    output_mot_file = "/ws/Frutillas/results/tracking/tracking_results_mot.txt"
     
     # Ejecutar tracking
-    run_tracking(coco_file, image_folder, output_file)
-    print("Proceso de tracking completado. Ejecuta visualize_tracking.py para generar la visualización.")
-
+    tracking_results, _ = run_tracking(coco_file, image_folder)
+    
+    # Exportar a MOT
+    export_to_mot(tracking_results, output_mot_file)
+    
+    print("Proceso de tracking completado. Archivo MOT generado.")

@@ -34,6 +34,8 @@ RUN apt-get update && \
     dpkg-reconfigure --frontend noninteractive tzdata
 
 RUN apt-get install -y ffmpeg
+RUN apt-get install -y python3.9-tk
+
 
 # Copy requirements file
 COPY requirements.txt /requirements.txt

@@ -16,10 +16,11 @@ def load_mot(mot_file):
                 continue
             frame = int(vals[0])
             tid = int(vals[1])
+            vis = int(vals[8])
             x, y, w, h = map(float, vals[2:6])
             class_id = int(vals[7])
             mot.setdefault(frame, []).append({
-                "id": tid, "x": x, "y": y, "w": w, "h": h, "class_id": class_id, "raw": vals[:]
+                "id": tid, "x": x, "y": y, "w": w, "h": h, "class_id": class_id, "visibility": vis, "raw": vals[:]
             })
     return mot
 
@@ -28,7 +29,9 @@ def save_mot(mot, output_file):
         for frame in sorted(mot.keys()):
             for det in mot[frame]:
                 vals = det["raw"]
-                vals[1] = str(det["id"])  # Solo track ID cambia
+                # Cambios permitidos: Track ID y visibilidad
+                vals[1] = str(det["id"])
+                vals[8] = str(det["visibility"])
                 f.write(",".join(str(x) for x in vals) + "\n")
 
 def get_image_list(image_folder):
@@ -105,6 +108,8 @@ class MOTEditor:
         
         bboxes = self.mot_data.get(frame, [])
         for i, det in enumerate(bboxes):
+            if det['visibility'] == 0:
+                continue
             # Ajuste de bbox con aspect ratio y padding
             x = int(det['x'] * scale) + pad_x
             y = int(det['y'] * scale) + pad_y
@@ -145,6 +150,8 @@ class MOTEditor:
         pad_x = (CANVAS_W - new_w) // 2
         pad_y = (CANVAS_H - new_h) // 2
         for i, det in enumerate(bboxes):
+            if det['visibility'] == 0:
+                continue
             x = int(det['x'] * scale) + pad_x
             y = int(det['y'] * scale) + pad_y
             w = int(det['w'] * scale)
@@ -158,6 +165,12 @@ class MOTEditor:
                         initialvalue=det['id'], minvalue=0)
                 if result is not None:
                     det['id'] = int(result)
+                # Pide nueva visibilidad
+                result_vis = simpledialog.askinteger("Editar Visibilidad", 
+                        f"Visibilidad actual: {det['visibility']}\nNueva visibilidad (0-1):",
+                        initialvalue=det['visibility'], minvalue=0, maxvalue=1)
+                if result_vis is not None:
+                    det['visibility'] = int(result_vis)
                 self.update_view()
                 return
 
@@ -169,6 +182,7 @@ def main():
     root = tk.Tk()
     root.withdraw()  # Oculta ventana principal para selección de archivos
 
+    # Gestión de archivos
     mot_file = filedialog.askopenfilename(title="Selecciona archivo MOT", filetypes=[("MOT Files", "*.txt *.mot"),("All Files", "*.*")])
     if not mot_file:
         messagebox.showerror("Error", "No seleccionaste archivo MOT.")

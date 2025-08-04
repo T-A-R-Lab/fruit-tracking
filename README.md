@@ -87,6 +87,12 @@ Este proyecto también permite trabajar con Ground Truth existente ejecutando sc
    ```
    Crea un video mostrando las trayectorias generadas por el algoritmo de tracking.
 
+4. **Editar archivos MOT**
+   ```bash
+   python3 tracking_editor.py
+   ```
+   Edita el archivo MOT generado por **coco_tracking**, se pueden editar los track_id y la visibilidad.
+
 ### Configuración de paths
 Antes de ejecutar los scripts, verifica y edita los paths en cada archivo según tu configuración local, o mantén la estructura de carpetas por defecto.
 

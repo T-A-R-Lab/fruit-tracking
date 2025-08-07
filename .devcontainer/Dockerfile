@@ -61,14 +61,14 @@ RUN cd /ws/TensorFlow/research && \
     cp object_detection/packages/tf2/setup.py . && \
     pip install . 
 
-# -- Instalation of Stone-Soup from source--
-RUN if [ ! -d "/ws/Stone-Soup" ]; then \
-    git clone "https://github.com/dstl/Stone-Soup.git" /ws/Stone-Soup; \
-    fi
+# # -- Instalation of Stone-Soup from source--
+# RUN if [ ! -d "/ws/Stone-Soup" ]; then \
+#     git clone "https://github.com/dstl/Stone-Soup.git" /ws/Stone-Soup; \
+#     fi
 
-RUN cd /ws/Stone-Soup && \
-    python3 -m pip install -e .[dev,video,tensorflow] --no-deps && \
-    python3 -m pip install stonesoup[video]
+# RUN cd /ws/Stone-Soup && \
+#     python3 -m pip install -e .[dev,video,tensorflow] --no-deps && \
+#     python3 -m pip install stonesoup[video]
 
 
 RUN echo "Building..."

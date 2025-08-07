@@ -5,3 +5,4 @@ matplotlib
 ipykernel
 jupyterlab
 yt_dlp
+stonesoup==1.7

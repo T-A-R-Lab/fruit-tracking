@@ -9,6 +9,19 @@ import copy
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+# Stone Soup imports
+from stonesoup.predictor.kalman import KalmanPredictor
+from stonesoup.updater.kalman import KalmanUpdater
+from stonesoup.models.transition.linear import CombinedLinearGaussianTransitionModel, ConstantVelocity
+from stonesoup.models.measurement.linear import LinearGaussian
+from stonesoup.types.state import GaussianState
+from stonesoup.types.detection import Detection as StoneSoupDetection
+from stonesoup.types.hypothesis import SingleHypothesis
+from stonesoup.hypothesiser.distance import DistanceHypothesiser
+from stonesoup.measures import Mahalanobis
+from stonesoup.dataassociator.neighbour import GNNWith2DAssignment
+from stonesoup.types.array import StateVector, CovarianceMatrix
+
 from models.coco_reader import COCOReader
 from models.id_manager import IDManager
 from config import TRACKER_CONFIG, MOT_DEFAULTS
@@ -28,18 +41,14 @@ class Detection:
 @dataclass
 class KalmanTrack:
     """
-    Track con filtro de Kalman para predicción de posición
+    Track con filtro de Kalman para predicción de posición usando Stone Soup
     IMPORTANTE: La bbox mostrada es SIEMPRE del GT, Kalman solo para asociación
     """
     track_id: int
     category_id: int
     
-    # Estado del Kalman: [x, vx, y, vy, w, h]
-    # x, y: centro del bbox
-    # vx, vy: velocidad
-    # w, h: dimensiones
-    state: np.ndarray = field(default_factory=lambda: np.zeros(6))
-    covariance: np.ndarray = field(default_factory=lambda: np.eye(6) * 1000)
+    # Estado de Stone Soup: GaussianState con [x, vx, y, vy]
+    state: GaussianState = None
     
     # Última bbox del ground truth asociada
     last_gt_bbox: List[float] = field(default_factory=list)
@@ -49,81 +58,101 @@ class KalmanTrack:
 
 
 class KalmanFilter:
-    """Filtro de Kalman para tracking de posición (solo para asociación de IDs)"""
+    """Filtro de Kalman usando Stone Soup con modelo 2D completo para tracking"""
     
     def __init__(self):
-        # Modelo de transición: [x, vx, y, vy, w, h]
-        # Asumimos velocidad constante para x, y
-        # w, h son constantes (con ruido)
-        self.dt = 1.0  # Delta tiempo entre frames
-        
-        # Matriz de transición
-        self.F = np.array([
-            [1, self.dt, 0, 0,       0, 0],  # x = x + vx*dt
-            [0, 1,       0, 0,       0, 0],  # vx = vx
-            [0, 0,       1, self.dt, 0, 0],  # y = y + vy*dt
-            [0, 0,       0, 1,       0, 0],  # vy = vy
-            [0, 0,       0, 0,       1, 0],  # w = w
-            [0, 0,       0, 0,       0, 1],  # h = h
+        # Modelo de transición 2D: [x, vx, y, vy] con velocidad constante
+        # CombinedLinearGaussianTransitionModel combina dos modelos ConstantVelocity
+        self.transition_model = CombinedLinearGaussianTransitionModel([
+            ConstantVelocity(5.0),  # Para x con menos ruido
+            ConstantVelocity(5.0)   # Para y con menos ruido
         ])
         
-        # Ruido del proceso
-        self.Q = np.diag([50**2, 50**2, 50**2, 50**2, 30**2, 30**2])
+        # Modelo de medición: observamos [x, y] 
+        # Estado es [x, vx, y, vy], observamos posiciones (índices 0 y 2)
+        self.measurement_model = LinearGaussian(
+            ndim_state=4,
+            mapping=[0, 2],  # mapeo a x (índice 0) e y (índice 2)
+            noise_covar=np.diag([2.0, 2.0])  # Bajo ruido de medición
+        )
         
-        # Matriz de observación: medimos [x, y, w, h]
-        self.H = np.array([
-            [1, 0, 0, 0, 0, 0],  # observamos x
-            [0, 0, 1, 0, 0, 0],  # observamos y
-            [0, 0, 0, 0, 1, 0],  # observamos w
-            [0, 0, 0, 0, 0, 1],  # observamos h
-        ])
+        # Predictor y actualizador de Kalman de Stone Soup
+        self.predictor = KalmanPredictor(self.transition_model)
+        self.updater = KalmanUpdater(self.measurement_model)
         
-        # Ruido de medición
-        self.R = np.diag([5**2, 5**2, 7**2, 7**2])
+        # Hypothesiser para asociación de datos usando distancia de Mahalanobis
+        self.hypothesiser = DistanceHypothesiser(
+            predictor=self.predictor,
+            updater=self.updater,
+            measure=Mahalanobis(),
+            missed_distance=30.0  # Distancia máxima para asociación
+        )
+        
+        # Data associator usando GNN (Global Nearest Neighbor)
+        self.data_associator = GNNWith2DAssignment(self.hypothesiser)
     
     def predict(self, track: KalmanTrack) -> np.ndarray:
         """
-        Predice el siguiente estado del track
+        Predice el siguiente estado del track usando Stone Soup
         
         Returns:
-            Estado predicho [x, y, w, h, vx, vy]
+            Estado predicho [x, vx, y, vy]
         """
-        # Predicción del estado
-        track.state = self.F @ track.state
+        from datetime import timedelta, datetime
         
-        # Predicción de la covarianza
-        track.covariance = self.F @ track.covariance @ self.F.T + self.Q
+        # Si el track no tiene timestamp, asignar uno
+        if track.state.timestamp is None:
+            track.state = GaussianState(
+                track.state.state_vector,
+                track.state.covar,
+                timestamp=datetime.now()
+            )
         
-        return track.state
+        # Calcular nuevo timestamp (1 segundo después del anterior)
+        new_timestamp = track.state.timestamp + timedelta(seconds=1)
+        
+        # Predicción usando Stone Soup con timestamp nuevo
+        predicted_state = self.predictor.predict(track.state, timestamp=new_timestamp)
+        track.state = predicted_state
+        
+        return track.state.state_vector.flatten()
     
     def update(self, track: KalmanTrack, measurement: np.ndarray):
         """
-        Actualiza el track con una nueva medición (bbox del GT)
+        Actualiza el track con una nueva medición (bbox del GT) usando Stone Soup
         
         Args:
-            measurement: [x_center, y_center, w, h]
+            measurement: [x_center, y_center] (solo posición)
         """
-        # Innovación (diferencia entre medición y predicción)
-        y = measurement - self.H @ track.state
+        from datetime import datetime
         
-        # Covarianza de la innovación
-        S = self.H @ track.covariance @ self.H.T + self.R
+        # Asegurar que el track tenga timestamp
+        if track.state.timestamp is None:
+            track.state = GaussianState(
+                track.state.state_vector,
+                track.state.covar,
+                timestamp=datetime.now()
+            )
         
-        # Ganancia de Kalman
-        K = track.covariance @ self.H.T @ np.linalg.inv(S)
+        # Crear detección de Stone Soup (debe ser vector columna) con timestamp
+        detection = StoneSoupDetection(
+            measurement.reshape(-1, 1),
+            timestamp=track.state.timestamp
+        )
         
-        # Actualizar estado
-        track.state = track.state + K @ y
+        # Crear hipótesis (asociación entre predicción y detección)
+        hypothesis = SingleHypothesis(track.state, detection)
         
-        # Actualizar covarianza
-        I = np.eye(len(track.state))
-        track.covariance = (I - K @ self.H) @ track.covariance
+        # Actualizar usando Stone Soup
+        updated_state = self.updater.update(hypothesis)
+        track.state = updated_state
         
+        # Guardar bbox del ground truth (con ancho y alto)
         track.frames_since_update = 0
     
     def initialize_track(self, bbox: List[float], track_id: int, category_id: int) -> KalmanTrack:
         """
-        Inicializa un nuevo track con una bbox del GT
+        Inicializa un nuevo track con una bbox del GT usando Stone Soup
         
         Args:
             bbox: [x, y, width, height]
@@ -133,23 +162,39 @@ class KalmanFilter:
         Returns:
             Nuevo KalmanTrack
         """
+        from datetime import datetime
+        
         x, y, w, h = bbox
         
         # Centro del bbox
         cx = x + w / 2
         cy = y + h / 2
         
-        # Estado inicial: [cx, vx=0, cy, vy=0, w, h]
-        state = np.array([cx, 0, cy, 0, w, h])
+        # Estado inicial: [x, vx=0, y, vy=0]
+        # Stone Soup usa vectores columna
+        state_vector = StateVector([[cx], [0], [cy], [0]])
         
-        # Covarianza inicial (alta incertidumbre en velocidad)
+        # Covarianza inicial (baja incertidumbre en posición, alta en velocidad)
+        covariance = CovarianceMatrix(np.diag([10.0, 50.0, 10.0, 50.0]))
+        
+        # Crear GaussianState de Stone Soup CON TIMESTAMP
+        gaussian_state = GaussianState(state_vector, covariance, timestamp=datetime.now())
+        
+        track = KalmanTrack(
+            track_id=track_id,
+            category_id=category_id,
+            state=gaussian_state,
+            last_gt_bbox=bbox,
+            frames_since_update=0
+        )
+        
+        return track
         covariance = np.diag([100**2, 50**2, 100**2, 50**2, 100**2, 100**2])
         
         track = KalmanTrack(
             track_id=track_id,
             category_id=category_id,
-            state=state,
-            covariance=covariance,
+            state=gaussian_state,
             last_gt_bbox=bbox,
             frames_since_update=0
         )
@@ -158,42 +203,38 @@ class KalmanFilter:
 
 
 def bbox_to_measurement(bbox: List[float]) -> np.ndarray:
-    """Convierte bbox [x,y,w,h] a medición [cx,cy,w,h] para Kalman"""
+    """Convierte bbox [x,y,w,h] a medición [cx,cy] para Kalman con Stone Soup"""
     x, y, w, h = bbox
-    return np.array([x + w/2, y + h/2, w, h])
+    return np.array([x + w/2, y + h/2])
 
 
-def calculate_distance(predicted_state: np.ndarray, bbox: List[float]) -> float:
+def calculate_distance(predicted_state: GaussianState, bbox: List[float]) -> float:
     """
-    Calcula distancia entre estado predicho y bbox del GT
+    Calcula distancia entre estado predicho de Stone Soup y bbox del GT
     
     Args:
-        predicted_state: [cx, vx, cy, vy, w, h]
+        predicted_state: GaussianState de Stone Soup con [x, vx, y, vy]
         bbox: [x, y, width, height]
         
     Returns:
         Distancia normalizada
     """
-    # Centro predicho
-    pred_cx = predicted_state[0]
-    pred_cy = predicted_state[2]
-    pred_w = predicted_state[4]
-    pred_h = predicted_state[5]
+    # Extraer estado predicho (Stone Soup usa vectores columna)
+    state_vector = predicted_state.state_vector.flatten()
+    pred_cx = state_vector[0]
+    pred_cy = state_vector[2]
     
     # Centro de la bbox
     bbox_cx = bbox[0] + bbox[2] / 2
     bbox_cy = bbox[1] + bbox[3] / 2
     
-    # Distancia euclidiana normalizada por tamaño
-    dx = (pred_cx - bbox_cx) / max(pred_w, bbox[2], 1)
-    dy = (pred_cy - bbox_cy) / max(pred_h, bbox[3], 1)
+    # Distancia euclidiana normalizada por tamaño de la bbox
+    dx = (pred_cx - bbox_cx) / max(bbox[2], 1)
+    dy = (pred_cy - bbox_cy) / max(bbox[3], 1)
     
     distance = np.sqrt(dx**2 + dy**2)
     
-    # Penalizar si hay diferencia grande en tamaño
-    size_diff = abs(pred_w - bbox[2]) / max(pred_w, 1) + abs(pred_h - bbox[3]) / max(pred_h, 1)
-    
-    return distance + 0.2 * size_diff
+    return distance
 
 
 class TrackingState:
@@ -231,8 +272,9 @@ class TrackingState:
         # Cambios de visibilidad: {frame: {track_id: visibility}}
         self.visibility_changes: Dict[int, Dict[int, int]] = {}
         
-        # Threshold de distancia para asociación
-        self.max_distance_threshold = 2.0  # Distancia normalizada máxima
+        # Threshold de distancia para asociación (más estricto ahora que el modelo es mejor)
+        self.max_distance_threshold = 3.0  # Distancia normalizada máxima
+        self.max_frames_lost = 5  # Frames máximos sin detección antes de eliminar track
     
     def _associate_detections(self, annotations: List[Dict], frame: int) -> List[Detection]:
         """
@@ -370,10 +412,9 @@ class TrackingState:
                 detections.append(detection)
         
         # Eliminar tracks que no se han actualizado en mucho tiempo
-        max_frames_lost = 3
         tracks_to_remove = []
         for track_id, track in self.active_tracks.items():
-            if track.frames_since_update > max_frames_lost:
+            if track.frames_since_update > self.max_frames_lost:
                 tracks_to_remove.append(track_id)
         
         for track_id in tracks_to_remove:

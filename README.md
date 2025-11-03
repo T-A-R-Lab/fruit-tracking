@@ -77,9 +77,10 @@ Este proyecto también permite trabajar con Ground Truth existente ejecutando sc
 
 2. **Ejecutar tracking**
    ```bash
-   python3 coco_tracking.py
+   cd tracking_code && python3 main.py
    ```
-   Procesa las anotaciones GT y genera las trayectorias de tracking utilizando filtros de Kalman.
+   Procesa las anotaciones GT y genera las trayectorias de tracking utilizando filtros de Kalman. Puede editarse en tiempo real
+   el ID de cada bounding box y la visualización de estos.
 
 3. **Visualizar resultados del tracking**
    ```bash
@@ -87,19 +88,6 @@ Este proyecto también permite trabajar con Ground Truth existente ejecutando sc
    ```
    Crea un video mostrando las trayectorias generadas por el algoritmo de tracking.
 
-4. **Editar archivos MOT**
-   ```bash
-   python3 tracking_editor.py
-   ```
-   Edita el archivo MOT generado por **coco_tracking**, se pueden editar los track_id y la visibilidad.
-
 ### Configuración de paths
 Antes de ejecutar los scripts, verifica y edita los paths en cada archivo según tu configuración local, o mantén la estructura de carpetas por defecto.
 
-### Personalización del tracking
-El script `coco_tracking.py` puede ser personalizado según las necesidades específicas:
-- Modelos de transición (velocidad constante, random walk)
-- Parámetros de ruido del proceso y medición
-- Algoritmos de asociación de datos
-- Métricas de distancia para la asociación
-- Configuración del filtro de Kalman

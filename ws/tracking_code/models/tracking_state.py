@@ -465,11 +465,35 @@ class TrackingState:
         Obtiene las detecciones del frame actual
         
         Returns:
-            Lista de detecciones del frame actual
+            Lista de detecciones del frame actual (sin duplicados)
         """
         if self.current_frame == 0:
             return []
-        return self.detections_by_frame.get(self.current_frame, [])
+        
+        detections = self.detections_by_frame.get(self.current_frame, [])
+        
+        # BUGFIX: Eliminar duplicados por annotation_id
+        # Esto puede pasar cuando se edita un ID manualmente
+        seen = {}
+        unique_detections = []
+        for det in detections:
+            # Usar annotation_id como clave única
+            # Si no existe, usar la bbox como clave
+            key = det.annotation_id if det.annotation_id != -1 else tuple(det.bbox)
+            
+            if key not in seen:
+                seen[key] = det
+                unique_detections.append(det)
+            else:
+                # Si hay duplicado, mantener el que tiene track_id más reciente
+                # (el que se editó manualmente)
+                if det.track_id != seen[key].track_id:
+                    # Hay dos versiones, mantener la actual
+                    unique_detections.remove(seen[key])
+                    unique_detections.append(det)
+                    seen[key] = det
+        
+        return unique_detections
     
     def get_detections_for_frame(self, frame: int) -> List[Detection]:
         """
@@ -519,12 +543,41 @@ class TrackingState:
             self.active_tracks[new_id] = kalman_track
             del self.active_tracks[old_id]
         
-        # Invalidar solo frames posteriores para reprocesarlos con el nuevo ID
-        frames_to_remove = [f for f in self.detections_by_frame.keys() if f > frame]
-        for f in frames_to_remove:
+        # MEJORADO: Marcar solo este track específico como "editado"
+        # para que en frames posteriores se recalcule SOLO este track
+        # Los demás tracks mantienen sus IDs originales
+        
+        # Agregar a un set de tracks editados manualmente
+        if not hasattr(self, '_manually_edited_tracks'):
+            self._manually_edited_tracks = {}
+        
+        # Registrar que este track fue editado desde este frame
+        if new_id not in self._manually_edited_tracks:
+            self._manually_edited_tracks[new_id] = frame
+        else:
+            # Mantener el frame más temprano de edición
+            self._manually_edited_tracks[new_id] = min(self._manually_edited_tracks[new_id], frame)
+        
+        # Invalidar SOLO frames posteriores donde aparece este track específico
+        # Esto permite que otros tracks mantengan sus IDs
+        frames_to_reprocess = []
+        for f in range(frame + 1, self.max_processed_frame + 1):
+            if f in self.detections_by_frame:
+                # Ver si este track aparece en el frame
+                has_this_track = any(d.track_id == new_id or d.track_id == old_id 
+                                     for d in self.detections_by_frame[f])
+                if has_this_track:
+                    frames_to_reprocess.append(f)
+        
+        # Eliminar solo esos frames específicos
+        for f in frames_to_reprocess:
             del self.detections_by_frame[f]
         
-        self.max_processed_frame = frame
+        # Ajustar max_processed_frame solo si eliminamos frames al final
+        if frames_to_reprocess:
+            self.max_processed_frame = min(frames_to_reprocess) - 1
+        else:
+            self.max_processed_frame = frame
         
         # MEJORADO: Si hay varias correcciones consecutivas del mismo ID,
         # re-entrenar el Kalman para aprender la trayectoria real

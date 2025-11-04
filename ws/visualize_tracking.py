@@ -112,7 +112,7 @@ def visualize_mot(mot_file, image_folder, output_video, coco_file=None, fps=5):
     print("¡Listo!")
 
 if __name__ == "__main__":
-    mot_file = "/ws/Frutillas/results/tracking/tracking_results_mot3.txt"
+    mot_file = "/ws/Frutillas/results/tracking/tracking_results_1.txt"
     image_folder = "/ws/Frutillas/images/"
     coco_file = "/ws/Frutillas/annotations/annotations_bbox_1_l_week1_30_70.json"
     output_video = "/ws/Frutillas/results/videos/tracking_visualization2.mp4" 

@@ -189,18 +189,6 @@ class KalmanFilter:
         )
         
         return track
-        covariance = np.diag([100**2, 50**2, 100**2, 50**2, 100**2, 100**2])
-        
-        track = KalmanTrack(
-            track_id=track_id,
-            category_id=category_id,
-            state=gaussian_state,
-            last_gt_bbox=bbox,
-            frames_since_update=0
-        )
-        
-        return track
-
 
 def bbox_to_measurement(bbox: List[float]) -> np.ndarray:
     """Convierte bbox [x,y,w,h] a medición [cx,cy] para Kalman con Stone Soup"""
@@ -522,18 +510,82 @@ class TrackingState:
             if detection.track_id == old_id:
                 detection.track_id = new_id
         
-        # Invalidar frames posteriores para reprocesarlos con el nuevo ID
+        # MEJORADO: Transferir el track de Kalman si existe
+        if old_id in self.active_tracks:
+            kalman_track = self.active_tracks[old_id]
+            kalman_track.track_id = new_id  # Cambiar el ID del track
+            
+            # Mover el track a la nueva key
+            self.active_tracks[new_id] = kalman_track
+            del self.active_tracks[old_id]
+        
+        # Invalidar solo frames posteriores para reprocesarlos con el nuevo ID
         frames_to_remove = [f for f in self.detections_by_frame.keys() if f > frame]
         for f in frames_to_remove:
             del self.detections_by_frame[f]
         
-        # También invalidar tracks activos de Kalman
-        self.active_tracks = {}
-        
         self.max_processed_frame = frame
+        
+        # MEJORADO: Si hay varias correcciones consecutivas del mismo ID,
+        # re-entrenar el Kalman para aprender la trayectoria real
+        if new_id in self.active_tracks:
+            # Buscar frames consecutivos editados con este ID
+            start_frame = frame
+            while start_frame > 1 and start_frame - 1 in self.detections_by_frame:
+                has_id = any(d.track_id == new_id for d in self.detections_by_frame[start_frame - 1])
+                if has_id:
+                    start_frame -= 1
+                else:
+                    break
+            
+            # Si hay al menos 3 frames consecutivos, reentrenar
+            if frame - start_frame >= 2:
+                self.retrain_kalman_from_history(new_id, start_frame, frame)
         
         return True
     
+
+    def retrain_kalman_from_history(self, track_id: int, start_frame: int, end_frame: int):
+        """
+        Re-entrena el filtro de Kalman con el historial de detecciones manuales
+        Útil después de corregir manualmente varios frames seguidos
+        
+        Args:
+            track_id: ID del track a reentrenar
+            start_frame: Frame inicial
+            end_frame: Frame final
+        """
+        if track_id not in self.active_tracks:
+            return
+        
+        track = self.active_tracks[track_id]
+        
+        # Recopilar todas las detecciones de este track en el rango
+        training_detections = []
+        for frame in range(start_frame, end_frame + 1):
+            if frame in self.detections_by_frame:
+                for det in self.detections_by_frame[frame]:
+                    if det.track_id == track_id:
+                        training_detections.append((frame, det.bbox))
+        
+        # Re-entrenar el Kalman con estas detecciones
+        if len(training_detections) >= 2:
+            # Usar las últimas N detecciones para actualizar velocidad
+            for i in range(len(training_detections) - 1):
+                frame1, bbox1 = training_detections[i]
+                frame2, bbox2 = training_detections[i + 1]
+                
+                # Calcular centros
+                cx1 = bbox1[0] + bbox1[2] / 2
+                cy1 = bbox1[1] + bbox1[3] / 2
+                cx2 = bbox2[0] + bbox2[2] / 2
+                cy2 = bbox2[1] + bbox2[3] / 2
+                
+                # Predecir y actualizar para ajustar la velocidad
+                self.kalman_filter.predict(track)
+                measurement = bbox_to_measurement(bbox2)
+                self.kalman_filter.update(track, measurement)
+
     def update_visibility(self, frame: int, track_id: int, visibility: int):
         """
         Actualiza la visibilidad de un track en un frame específico
